@@ -404,3 +404,4 @@ test.bak
 output
 test-pkm/
 luajit-decompiler-v2
+build/

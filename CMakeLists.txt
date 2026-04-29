@@ -8,6 +8,9 @@ if(MSVC)
     add_compile_options(/J)
 else()
     add_compile_options(-funsigned-char)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-fms-extensions)
+    endif()
 endif()
 
 add_executable(luajit-decompiler-v2

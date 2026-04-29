@@ -399,3 +399,8 @@ FodyWeavers.xsd
 
 *.sln
 *.vcxproj*
+test/
+test.bak
+output
+test-pkm/
+luajit-decompiler-v2

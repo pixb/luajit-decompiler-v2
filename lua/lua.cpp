@@ -1,4 +1,4 @@
-#include "..\main.h"
+#include "../main.h"
 
 Lua::Lua(const Bytecode& bytecode, const Ast& ast, const std::string& filePath, const bool& forceOverwrite, const bool& minimizeDiffs, const bool& unrestrictedAscii)
 	: bytecode(bytecode), ast(ast), filePath(filePath), forceOverwrite(forceOverwrite), minimizeDiffs(minimizeDiffs), unrestrictedAscii(unrestrictedAscii) {}
@@ -815,7 +815,10 @@ void Lua::write_function_definition(const Ast::Function& function, const bool& i
 void Lua::write_number(const double& number) {
 	static const auto try_string_to_number = [](const std::string& string, const double& number)->bool {
 		try {
-			return std::stod(string) == number;
+			double parsed = std::stod(string);
+			if (std::isnan(number)) return std::isnan(parsed);
+			if (std::isinf(number)) return std::isinf(parsed) && ((number < 0) == (parsed < 0));
+			return parsed == number;
 		} catch (...) {
 			return false;
 		}
@@ -824,7 +827,11 @@ void Lua::write_number(const double& number) {
 	const uint64_t rawDouble = std::bit_cast<uint64_t>(number);
 
 	if ((rawDouble & DOUBLE_EXPONENT) == DOUBLE_SPECIAL) {
-		write(rawDouble & DOUBLE_SIGN ? "-1e309" : "1e309");
+		if (std::isnan(number)) {
+			write("0/0");
+			return;
+		}
+		write(rawDouble & DOUBLE_SIGN ? "-math.huge" : "math.huge");
 		return;
 	}
 
@@ -839,7 +846,13 @@ void Lua::write_number(const double& number) {
 		if (!try_string_to_number(string, number)) {
 			string.resize(std::snprintf(nullptr, 0, "%1.17g", number));
 			std::snprintf(string.data(), string.size() + 1, "%1.17g", number);
-			assert(try_string_to_number(string, number), "Failed to convert number to valid string", filePath, DEBUG_INFO);
+
+			if (!try_string_to_number(string, number)) {
+				char buffer[32];
+				std::snprintf(buffer, sizeof(buffer), "%a", number);
+				write(buffer);
+				return;
+			}
 		}
 	}
 
@@ -1004,28 +1017,48 @@ void Lua::write_indent() {
 void Lua::create_file() {
 #ifndef _DEBUG
 	if (!forceOverwrite) {
-		file = CreateFileA(filePath.c_str(), GENERIC_READ, NULL, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+#ifdef _WIN32
+		file = _open(filePath.c_str(), _O_RDONLY | _O_BINARY);
+#else
+		file = open(filePath.c_str(), O_RDONLY);
+#endif
 
-		if (file != INVALID_HANDLE_VALUE) {
+		if (file != -1) {
 			close_file();
-			assert(MessageBoxA(NULL, ("The file " + filePath + " already exists.\n\nDo you want to overwrite it?").c_str(), PROGRAM_NAME, MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2) == IDYES,
-				"File already exists", filePath, DEBUG_INFO);
+			print("The file " + filePath + " already exists.\n\nDo you want to overwrite it? [y/N]");
+			std::string choice;
+			std::getline(std::cin, choice);
+			if (choice.empty() || (choice.size() && tolower(choice[0]) != 'y')) {
+				assert(false, "File already exists", filePath, DEBUG_INFO);
+			}
 		}
 	}
 #endif
-	file = CreateFileA(filePath.c_str(), GENERIC_WRITE, NULL, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	assert(file != INVALID_HANDLE_VALUE, "Unable to create file", filePath, DEBUG_INFO);
+#ifdef _WIN32
+	file = _open(filePath.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+	file = open(filePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+#endif
+	assert(file != -1, "Unable to create file", filePath, DEBUG_INFO);
 }
 
 void Lua::close_file() {
-	if (file == INVALID_HANDLE_VALUE) return;
-	CloseHandle(file);
-	file = INVALID_HANDLE_VALUE;
+	if (file == -1) return;
+#ifdef _WIN32
+	_close(file);
+#else
+	close(file);
+#endif
+	file = -1;
 }
 
 void Lua::write_file() {
-	DWORD charsWritten = 0;
-	assert(WriteFile(file, writeBuffer.data(), writeBuffer.size(), &charsWritten, NULL) && !(writeBuffer.size() - charsWritten), "Failed writing to file", filePath, DEBUG_INFO);
+#ifdef _WIN32
+	int charsWritten = _write(file, writeBuffer.data(), writeBuffer.size());
+#else
+	ssize_t charsWritten = ::write(file, writeBuffer.data(), writeBuffer.size());
+#endif
+	assert(charsWritten == static_cast<int>(writeBuffer.size()), "Failed writing to file", filePath, DEBUG_INFO);
 	writeBuffer.clear();
 	writeBuffer.shrink_to_fit();
 }
